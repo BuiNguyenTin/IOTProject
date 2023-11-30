@@ -63,11 +63,10 @@ void setup() {
   lcd.setCursor(0, 1);
 
   //SONIC
-  pinMode(trig,OUTPUT);   // chân trig sẽ phát tín hiệu
-  pinMode(echo,INPUT);    // chân echo sẽ nhận tín hiệu
+  pinMode(trig, OUTPUT);   // chân trig sẽ phát tín hiệu
+  pinMode(echo, INPUT);    // chân echo sẽ nhận tín hiệu
 
   //DHT
-  Serial.println("DHTxx test!");
   dht.begin();
 
   //SERVO
@@ -258,7 +257,8 @@ void loop() {
 
 }
 
-uint8_t getFingerprintEnroll() { //FINGER enroll
+//FINGER enroll
+uint8_t getFingerprintEnroll() { 
 
   int p = -1;
   Serial.print("Waiting for valid finger to enroll as #"); Serial.println(id);
