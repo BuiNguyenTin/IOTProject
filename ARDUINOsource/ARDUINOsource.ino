@@ -1,36 +1,23 @@
-#include <ESP8266WiFi.h>          //Wifi
-#include <PubSubClient.h>         //Wifi
-#include "DHT.h"                  //DHT
-#include <LiquidCrystal_I2C.h>    //LCD
-#include <Wire.h>                 //Set SDA, SCL of LCD
-#include <Adafruit_Fingerprint.h> //Finger
-#include <WiFi.h>                 //ifttt
+#include <Adafruit_Fingerprint.h>
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include "DHT.h" //DHT
+#include <LiquidCrystal_I2C.h> //LCD
+#include <Adafruit_Fingerprint.h>
+#include <Servo.h>
+#include <Wire.h>
 
-//IFTTT
-// const char* host = "maker.ifttt.com";
-// const int port = 80;
-// const char* request = "/trigger/SLnoti/with/key/l9Pu7kbjrh7bB-AxXeNssh_SVLmRjRtXFVDlfw-Q3U1"; //Thay đổi tên noti
-// //?value1=4&value2=5 cộng chuỗi
+int servo_time = 0;
+String servo_status = "Dong";
+int buzzer = D0;
+int warning = 0;
+int count_open = 3;
 
-// void sendRequest() {
-//   WiFiClient client;
-//   while(!client.connect(host, port)) {
-//     Serial.println("connection fail");
-//     delay(1000);
-//   }
-//   client.print(String("GET ") + request + " HTTP/1.1\r\n"
-//               + "Host: " + host + "\r\n"
-//               + "Connection: close\r\n\r\n");
-//   delay(500);
-
-//   while(client.available()) {
-//     String line = client.readStringUntil('\r');
-//     Serial.print(line);
-//   }
-// }
+//Servo
+Servo myServo;
 
 //DHT 
-#define DHTPIN D5 // what digital pin we're connected to
+#define DHTPIN D5     // what digital pin we're connected to
 #define DHTTYPE DHT11 
 DHT dht(DHTPIN, DHTTYPE);
 
@@ -38,14 +25,13 @@ DHT dht(DHTPIN, DHTTYPE);
 int sensorValue;
 
 //UltraSonic
-const int trig = D8;  // trig of HC-SR04
-const int echo = D7;  // echo of HC-SR04
+const int trig = D8;     // chân trig của HC-SR04
+const int echo = D7;     // chân echo của HC-SR04
 
-// #i2c = I2C(scl=Pin(0), sda=Pin(2), freq=10000)
 //LCD
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-int sdaPin = D3;
-int sclPin = D4;
+int sdaPin = D3;  // Chân D3 là chân SDA
+int sclPin = D4;  // Chân D4 là chân SCL
 
 //Finger
 volatile int finger_status = -1;
@@ -53,7 +39,7 @@ volatile int finger_status = -1;
 #define Finger_Rx 4
 #define Finger_Tx 5
 
-#if (defined(AVR) || defined(ESP8266)) && !defined(AVR_ATmega2560)
+#if (defined(_AVR_) || defined(ESP8266)) && !defined(_AVR_ATmega2560_)
 SoftwareSerial mySerial(Finger_Rx, Finger_Tx);
 #else
 #define mySerial Serial1
@@ -61,9 +47,7 @@ SoftwareSerial mySerial(Finger_Rx, Finger_Tx);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
 uint8_t id;
-
-//Read number from Serial
-uint8_t readnumber(void) { 
+uint8_t readnumber(void) {
   uint8_t num = 0;
 
   while (num == 0) {
@@ -98,7 +82,8 @@ void mqttConnect() {
       Serial.println("connected");
 
       //***Subscribe all topic you need***
-      mqttClient.subscribe("21127702/led");
+      mqttClient.subscribe("21127583/ser_web");
+      mqttClient.subscribe("21127583/fin_web");
     }
     else {
       Serial.println("try again in 5 seconds");
@@ -117,12 +102,24 @@ void callback(char* topic, byte* message, unsigned int length) {
   Serial.println(strMsg);
 
     //***Insert code here to control other devices***
-  if(String(topic) == "21127702/led") {
-    if(strMsg == "on") {
-      digitalWrite(2, HIGH);
+  if(String(topic) == "21127583/ser_web") {
+    if(strMsg == "Mo") {
+      servo_open();
     }
     else {
-      digitalWrite(2, LOW);
+      servo_close();
+    }
+  }
+  if(String(topic) == "21127583/fin_web") {
+    int id = strMsg.toInt();
+    bool result = fingerprint_registration(id);
+    if(result == 1){
+      char buffer_result[5] = "true";
+      mqttClient.publish("21127583/fin", buffer_result);
+    }
+    else{
+      char buffer_result[6] = "false";
+      mqttClient.publish("21127583/fin", buffer_result);
     }
   }
 }
@@ -147,23 +144,18 @@ void temperature(){
   sprintf(buffer_hum, "%f", h);
   mqttClient.publish("21127583/hum", buffer_hum);
   
-  int distance = ultrasonic(); //Cal Distance when human come closely
+  int distance = ultrasonic();
   if(distance <=50){
     lcd.backlight();
   }
   else{
     lcd.noBacklight();
   }
-
-  //LCD displays Humidity
   lcd.setCursor(0,0);
   lcd.clear();
   lcd.print("Humidity: ");
   lcd.setCursor(0,1);
   lcd.print(h);
-
-  //Cal Distance when human come closely
-  distance = ultrasonic();
   if(distance <=50){
     lcd.backlight();
   }
@@ -171,16 +163,11 @@ void temperature(){
     lcd.noBacklight();
   }
   delay(1000);
-
-  //LCD displays Temperature
   lcd.setCursor(0,0);
   lcd.clear();
   lcd.print("Temperature: ");
   lcd.setCursor(0,1);
   lcd.print(t);
-
-  //Cal Distance when human come closely
-  distance = ultrasonic();
   if(distance <=50){
     lcd.backlight();
   }
@@ -197,7 +184,6 @@ void air_quality(){
   sprintf(buffer_air, "%d", sensorValue);
   mqttClient.publish("21127583/air", buffer_air);
 
-  //Cal Distance when human come closely
   int distance = ultrasonic();
   if(distance <=50){
     lcd.backlight();
@@ -205,22 +191,11 @@ void air_quality(){
   else{
     lcd.noBacklight();
   }
-
-  //LCD displays Air quality
   lcd.setCursor(0,0);
   lcd.clear();     
   lcd.print("AirQua=");
   lcd.setCursor(0,1);
   lcd.print(sensorValue);
-
-  //Cal Distance when human come closely
-  int distance = ultrasonic();
-  if(distance <=50){
-    lcd.backlight();
-  }
-  else{
-    lcd.noBacklight();
-  }
   delay(1000);
 }
 
@@ -245,8 +220,7 @@ int ultrasonic(){
   else{
     lcd.noBacklight();
   }
-
-  /* In kết quả ra Serial Monitor *///
+  /* In kết quả ra Serial Monitor */
   lcd.setCursor(0,0);
   lcd.clear();
   lcd.print("Distance: ");
@@ -258,6 +232,12 @@ int ultrasonic(){
 
 void setup() {
   Serial.begin(9600);
+  myServo.attach(D6);
+  servo_close_web();
+
+  //Buzzer
+  pinMode(buzzer, OUTPUT);
+
   //DHT
   dht.begin();
   //UltraSonic
@@ -272,20 +252,11 @@ void setup() {
   lcd.print("Hello Everyone");
   lcd.setCursor(0,1);
   lcd.print("Xin chao cac ban");
-
-  //Wifi
   Serial.print("Connecting to WiFi");
-  pinMode(2, OUTPUT);
-
-  wifiConnect();
-  mqttClient.setServer(mqttServer, port);
-  mqttClient.setCallback(callback);
-  mqttClient.setKeepAlive(90);
+  // pinMode(2, OUTPUT);
 
   while (!Serial);  // For Yun/Leo/Micro/Zero/...
   delay(100);
-
-  //Finger
   Serial.println("\n\nAdafruit Fingerprint sensor enrollment");
 
   // set the data rate for the sensor serial port
@@ -342,55 +313,102 @@ void setup() {
       Serial.print("Sensor contains "); Serial.print(finger.templateCount); Serial.println(" templates");
   }
 
-  //IFTTT
-  // sendRequest();
+  wifiConnect();
+  mqttClient.setServer(mqttServer, port);
+  mqttClient.setCallback(callback);
+  mqttClient.setKeepAlive(90);
 }
 
 void loop() {
-  //Connect MQTT
   if(!mqttClient.connected()) {
     mqttConnect();
   }
   mqttClient.loop();
 
-  //Temparature
   temperature();
-
-  //Air quality
   air_quality();
   
   // FINGER 
-    //enroll
-  FGenroll();
+  
+  //connect
+  if(servo_status == "Mo" && millis()-servo_time>10000){
+    servo_close_web();
+  }
 
-    //connect
-  getFingerprintID();
-  delay(1000);   
+  int check = getFingerprintID();
+  if(check >= 1 && check <= 127){
+    servo_open_web();
+  }
+  else if(check == 254){
+    warning += 1;
+  }
+  if(warning == count_open){
+    digitalWrite(D0, HIGH);
+    delay(3000);
+    digitalWrite(D0, LOW);
+    warning = 0;
+  }
+  rfid();
 }
 
-//FINGER enroll
-void FGenroll() {
-  Serial.println("Please type ID # (from 1 to 127) want to save...");
-  Serial.println("Please hold FINGER on Fingeprint");
-
-  //NHẬN DỮ LIỆU TỪ WEB (SỐ) KHI NGƯỜI DÙNG NHẬP
-  id = readnumber();
+bool fingerprint_registration(int id){
+  // enroll
   if (id == 0) {// ID #0 not allowed, try again!
-     return;
+     return false;
   }
-  /*
-  THAY HÀM TRÊN BẰNG HÀM NHẬN DỮ LIỆU TỪ WEB
-  */
-
   Serial.print("Enrolling ID #");
   Serial.println(id);
 
-  while ( !getFingerprintEnroll() );
+  int count = 0;
+  while (!  getFingerprintEnroll(id) ){
+    count++;
+    if(count>=3){
+      return false;
+    }
+  }
+  return true;
 }
 
+void rfid(){
+  if (Serial.available() > 0) {
+    int id = Serial.parseInt(); // Đọc giá trị số từ cổng serial
+    // Bây giờ bạn có thể sử dụng giá trị cảm biến (sensorValue) trong Arduino
+    if(id == 1){
+      servo_open_web();
+    }
+  }
+}
 
-//ĐỐI VỚI HÀM ENROLL NÀY, GỬI CÁC HIỂN THỊ LÊN WEB RỒI HIỂN THỊ CHO NGƯỜI DÙNG XEM LUÔN NHA
-uint8_t getFingerprintEnroll() { 
+void servo_open(){
+  myServo.write(180);
+  servo_status = "Mo";
+  servo_time = millis();
+}
+
+void servo_close(){
+  myServo.write(0);
+  servo_status = "Dong";
+}
+
+void servo_open_web(){
+  myServo.write(180);
+  servo_status = "Mo";
+  servo_time = millis();
+  char buffer_ser[servo_status.length() + 1]; // +1 để chứa ký tự kết thúc chuỗi (\0)
+  servo_status.toCharArray(buffer_ser, sizeof(buffer_ser));
+  mqttClient.publish("21127583/ser", buffer_ser);
+}
+
+void servo_close_web(){
+  myServo.write(0);
+  servo_status = "Dong";
+  char buffer_ser[servo_status.length() + 1]; // +1 để chứa ký tự kết thúc chuỗi (\0)
+  servo_status.toCharArray(buffer_ser, sizeof(buffer_ser));
+  mqttClient.publish("21127583/ser", buffer_ser);
+}
+
+//FINGER enroll
+bool getFingerprintEnroll(int id) { 
 
   int p = -1;
   Serial.print("Waiting for valid finger to enroll as #"); Serial.println(id);
@@ -399,23 +417,18 @@ uint8_t getFingerprintEnroll() {
     switch (p) {
     case FINGERPRINT_OK:
       Serial.println("Image taken");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_NOFINGER:
       Serial.println(".");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_IMAGEFAIL:
       Serial.println("Imaging error");
-      //GỬI DỮ LIỆU
       break;
     default:
       Serial.println("Unknown error");
-      //GỬI DỮ LIỆU
       break;
     }
   }
@@ -426,32 +439,25 @@ uint8_t getFingerprintEnroll() {
   switch (p) {
     case FINGERPRINT_OK:
       Serial.println("Image converted");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_IMAGEMESS:
       Serial.println("Image too messy");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_FEATUREFAIL:
       Serial.println("Could not find fingerprint features");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_INVALIDIMAGE:
       Serial.println("Could not find fingerprint features");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     default:
       Serial.println("Unknown error");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
   }
 
   Serial.println("Remove finger");
-  //GỬI DỮ LIỆU
   delay(2000);
   p = 0;
   while (p != FINGERPRINT_NOFINGER) {
@@ -460,29 +466,23 @@ uint8_t getFingerprintEnroll() {
   Serial.print("ID "); Serial.println(id);
   p = -1;
   Serial.println("Place same finger again");
-  //GỬI DỮ LIỆU
   while (p != FINGERPRINT_OK) {
     p = finger.getImage();
     switch (p) {
     case FINGERPRINT_OK:
       Serial.println("Image taken");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_NOFINGER:
       Serial.print(".");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_IMAGEFAIL:
       Serial.println("Imaging error");
-      //GỬI DỮ LIỆU
       break;
     default:
       Serial.println("Unknown error");
-      //GỬI DỮ LIỆU
       break;
     }
   }
@@ -493,80 +493,62 @@ uint8_t getFingerprintEnroll() {
   switch (p) {
     case FINGERPRINT_OK:
       Serial.println("Image converted");
-      //GỬI DỮ LIỆU
       break;
     case FINGERPRINT_IMAGEMESS:
       Serial.println("Image too messy");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_FEATUREFAIL:
       Serial.println("Could not find fingerprint features");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     case FINGERPRINT_INVALIDIMAGE:
       Serial.println("Could not find fingerprint features");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
     default:
       Serial.println("Unknown error");
-      //GỬI DỮ LIỆU
-      return p;
+      return false;
   }
 
   // OK converted!
   Serial.print("Creating model for #");  Serial.println(id);
-  //GỬI DỮ LIỆU
 
   p = finger.createModel();
   if (p == FINGERPRINT_OK) {
     Serial.println("Prints matched!");
-    //GỬI DỮ LIỆU
   } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
     Serial.println("Communication error");
-    //GỬI DỮ LIỆU
-    return p;
+    return false;
   } else if (p == FINGERPRINT_ENROLLMISMATCH) {
     Serial.println("Fingerprints did not match");
-    //GỬI DỮ LIỆU
-    return p;
+    return false;
   } else {
     Serial.println("Unknown error");
-    //GỬI DỮ LIỆU
-    return p;
+    return false;
   }
 
   Serial.print("ID "); Serial.println(id);
   p = finger.storeModel(id);
   if (p == FINGERPRINT_OK) {
     Serial.println("Stored!");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI THÀNH CÔNG
   } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
     Serial.println("Communication error");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return false;
   } else if (p == FINGERPRINT_BADLOCATION) {
     Serial.println("Could not store in that location");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return false;
   } else if (p == FINGERPRINT_FLASHERR) {
     Serial.println("Error writing to flash");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return false;
   } else {
     Serial.println("Unknown error");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return false;
   }
 
   return true;
 }
 
-//FINGER connect
-//HÀM NÀY XUẤT PHẦN DƯỚI THÔI (CÓ COMMAND R ĐÓ)
 uint8_t getFingerprintID() {
   uint8_t p = finger.getImage();
   switch (p) {
@@ -575,16 +557,16 @@ uint8_t getFingerprintID() {
       break;
     case FINGERPRINT_NOFINGER:
       Serial.println("No finger detected");
-      return p;
+      return 253;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      return p;
+      return 254;
     case FINGERPRINT_IMAGEFAIL:
       Serial.println("Imaging error");
-      return p;
+      return 254;
     default:
       Serial.println("Unknown error");
-      return p;
+      return 254;
   }
 
   // OK success!
@@ -596,38 +578,34 @@ uint8_t getFingerprintID() {
       break;
     case FINGERPRINT_IMAGEMESS:
       Serial.println("Image too messy");
-      return p;
+      return 254;
     case FINGERPRINT_PACKETRECIEVEERR:
       Serial.println("Communication error");
-      return p;
+      return 254;
     case FINGERPRINT_FEATUREFAIL:
       Serial.println("Could not find fingerprint features");
-      return p;
+      return 254;
     case FINGERPRINT_INVALIDIMAGE:
       Serial.println("Could not find fingerprint features");
-      return p;
+      return 254;
     default:
       Serial.println("Unknown error");
-      return p;
+      return 254;
   }
 
   // OK converted!
   p = finger.fingerSearch();
   if (p == FINGERPRINT_OK) {
     Serial.println("Found a print match!");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI THÀNH CÔNG
   } else if (p == FINGERPRINT_PACKETRECIEVEERR) {
     Serial.println("Communication error");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return 254;
   } else if (p == FINGERPRINT_NOTFOUND) {
     Serial.println("Did not find a match");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return 254;
   } else {
     Serial.println("Unknown error");
-    //GỬI DỮ LIỆU, XUẤT TRẠNG THÁI KHÔNG THÀNH CÔNG
-    return p;
+    return 254;
   }
 
   // found a match!
@@ -636,3 +614,20 @@ uint8_t getFingerprintID() {
 
   return finger.fingerID;
 }
+
+// // returns -1 if failed, otherwise returns ID #
+// int getFingerprintIDez() {
+//   uint8_t p = finger.getImage();
+//   if (p != FINGERPRINT_OK)  return -1;
+
+//   p = finger.image2Tz();
+//   if (p != FINGERPRINT_OK)  return -1;
+
+//   p = finger.fingerFastSearch();
+//   if (p != FINGERPRINT_OK)  return -1;
+
+//   // found a match!
+//   Serial.print("Found ID #"); Serial.print(finger.fingerID);
+//   Serial.print(" with confidence of "); Serial.println(finger.confidence);
+//   return finger.fingerID;
+// }
